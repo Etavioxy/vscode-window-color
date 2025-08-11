@@ -98,6 +98,50 @@
                             }
                         }
                     }
+                },
+                "windowColor.workspaceSettings": {
+                    "type": "object",
+                    "description": "Per-workspace color settings stored in user preferences",
+                    "default": {},
+                    "patternProperties": {
+                        ".*": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Name of the window"
+                                },
+                                "mainColor": {
+                                    "type": "string",
+                                    "description": "Main color of the window"
+                                },
+                                "isActivityBarColored": {
+                                    "type": "boolean",
+                                    "description": "Whether the activity bar is colored"
+                                },
+                                "isTitleBarColored": {
+                                    "type": "boolean",
+                                    "description": "Whether the title bar is colored"
+                                },
+                                "isStatusBarColored": {
+                                    "type": "boolean",
+                                    "description": "Whether the status bar is colored"
+                                },
+                                "isWindowNameColored": {
+                                    "type": "boolean",
+                                    "description": "Whether the window name is colored"
+                                },
+                                "isActiveItemsColored": {
+                                    "type": "boolean",
+                                    "description": "Whether active items are colored"
+                                },
+                                "setWindowTitle": {
+                                    "type": "boolean",
+                                    "description": "Whether to set the window title"
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },

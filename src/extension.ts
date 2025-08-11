@@ -202,7 +202,7 @@ async function createWindowSettingsWebview(context: vscode.ExtensionContext, dir
                     updateWindowTitle(newProps);
                 }
                 
-                // Save configurations in parallel
+                // Save configurations in parallel - these now save to user preferences
                 const savePromises = [
                     saveToWorkspaceConfig('name', newProps.windowName),
                     saveToWorkspaceConfig('mainColor', newProps.mainColor),
