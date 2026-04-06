@@ -2,6 +2,81 @@ import * as vscode from 'vscode';
 import { WindowSettings, WindowReference, WindowGroup } from './extension';
 import { getContrastColor, generateRandomColor } from './helpers';
 
+type SsotWorkspaceSettings = {
+    name?: string;
+    mainColor?: string;
+    isActivityBarColored?: boolean;
+    isTitleBarColored?: boolean;
+    isStatusBarColored?: boolean;
+    isWindowNameColored?: boolean;
+    isActiveItemsColored?: boolean;
+    setWindowTitle?: boolean;
+};
+
+type SsotDocument = {
+    windowColor?: {
+        workspaceSettings?: Record<string, SsotWorkspaceSettings>;
+    };
+};
+
+function normalizeWorkspaceKey(value: string): string {
+    return value.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase();
+}
+
+function getSsotConfigPath(): string | undefined {
+    const rawPath = vscode.workspace.getConfiguration('windowColor').get<string>('configPath');
+    if (!rawPath || !rawPath.trim()) {
+        return undefined;
+    }
+    return rawPath.trim();
+}
+
+async function readSsotDocument(): Promise<SsotDocument | null> {
+    const configPath = getSsotConfigPath();
+    if (!configPath) {
+        return null;
+    }
+
+    try {
+        const uri = vscode.Uri.file(configPath);
+        const raw = await vscode.workspace.fs.readFile(uri);
+        return JSON.parse(raw.toString()) as SsotDocument;
+    } catch {
+        return null;
+    }
+}
+
+async function writeSsotDocument(ssot: SsotDocument): Promise<void> {
+    const configPath = getSsotConfigPath();
+    if (!configPath) {
+        throw new Error('windowColor.configPath is not configured');
+    }
+    const uri = vscode.Uri.file(configPath);
+    const payload = `${JSON.stringify(ssot, null, 2)}\n`;
+    await vscode.workspace.fs.writeFile(uri, Buffer.from(payload, 'utf8'));
+}
+
+function getSsotSettingsForDirectory(
+    ssot: SsotDocument,
+    directory: string
+): SsotWorkspaceSettings | undefined {
+    const workspaceSettings = ssot.windowColor?.workspaceSettings;
+    if (!workspaceSettings) {
+        return undefined;
+    }
+
+    const direct = workspaceSettings[directory];
+    if (direct) {
+        return direct;
+    }
+
+    const targetKey = normalizeWorkspaceKey(directory);
+    const matchedKey = Object.keys(workspaceSettings).find(
+        key => normalizeWorkspaceKey(key) === targetKey
+    );
+    return matchedKey ? workspaceSettings[matchedKey] : undefined;
+}
+
 export async function loadWorkspaces(): Promise<(WindowReference & { settings: WindowSettings })[]> {
     const references = loadWindowReferences();
     return await Promise.all(references.map(async ref => {
@@ -12,6 +87,27 @@ export async function loadWorkspaces(): Promise<(WindowReference & { settings: W
 
 export async function readConfig(directory: string): Promise<WindowSettings> {
     // console.log('[DEBUG] readConfig called for directory:', directory);
+    const fallbackWindowName = directory.split('/').pop() || 'Untitled Window';
+
+    const ssot = await readSsotDocument();
+    if (ssot) {
+        const ssotSettings = getSsotSettingsForDirectory(ssot, directory);
+        if (ssotSettings) {
+            const ssotMainColor = ssotSettings.mainColor || generateRandomColor();
+            return {
+                windowName: ssotSettings.name || fallbackWindowName,
+                mainColor: ssotMainColor,
+                mainColorContrast: getContrastColor(ssotMainColor),
+                isActivityBarColored: ssotSettings.isActivityBarColored ?? false,
+                isTitleBarColored: ssotSettings.isTitleBarColored ?? true,
+                isStatusBarColored: ssotSettings.isStatusBarColored ?? true,
+                isWindowNameColored: ssotSettings.isWindowNameColored ?? true,
+                isActiveItemsColored: ssotSettings.isActiveItemsColored ?? true,
+                setWindowTitle: ssotSettings.setWindowTitle ?? false
+            };
+        }
+    }
+
     const uri = vscode.Uri.file(directory);
     const configPath = directory.endsWith('.code-workspace') ? uri : uri.with({ path: `${uri.path}/.vscode/settings.json` });
     // console.log('[DEBUG] Reading config from path:', configPath.fsPath);
@@ -26,7 +122,6 @@ export async function readConfig(directory: string): Promise<WindowSettings> {
         settings = {};
     }
 
-    const fallbackWindowName = directory.split('/').pop() || 'Untitled Window';
     const windowColorSettings = directory.endsWith('.code-workspace') ? (settings['settings'] || {}) : settings;
     // console.log('[DEBUG] Extracted windowColorSettings:', JSON.stringify(windowColorSettings, null, 2));
     
@@ -148,6 +243,47 @@ export async function saveToWorkspaceConfig(key: string, value: string | boolean
     const config = vscode.workspace.getConfiguration('windowColor');
     await config.update(key, value, vscode.ConfigurationTarget.Workspace);
     // console.log('[DEBUG] saveToWorkspaceConfig completed for key:', key);
+}
+
+export async function saveWindowSettingsToSsot(directory: string, settings: WindowSettings): Promise<void> {
+    const configPath = getSsotConfigPath();
+    if (!configPath) {
+        // Backward-compatible fallback when SSOT path is not configured.
+        await Promise.all([
+            saveToWorkspaceConfig('name', settings.windowName),
+            saveToWorkspaceConfig('mainColor', settings.mainColor),
+            saveToWorkspaceConfig('isActivityBarColored', settings.isActivityBarColored),
+            saveToWorkspaceConfig('isTitleBarColored', settings.isTitleBarColored),
+            saveToWorkspaceConfig('isStatusBarColored', settings.isStatusBarColored),
+            saveToWorkspaceConfig('isWindowNameColored', settings.isWindowNameColored),
+            saveToWorkspaceConfig('isActiveItemsColored', settings.isActiveItemsColored),
+            saveToWorkspaceConfig('setWindowTitle', settings.setWindowTitle)
+        ]);
+        return;
+    }
+
+    const ssot = (await readSsotDocument()) || {};
+    if (!ssot.windowColor) {
+        ssot.windowColor = {};
+    }
+    if (!ssot.windowColor.workspaceSettings) {
+        ssot.windowColor.workspaceSettings = {};
+    }
+
+    const previousSettings = getSsotSettingsForDirectory(ssot, directory) || {};
+    ssot.windowColor.workspaceSettings[directory] = {
+        ...previousSettings,
+        name: settings.windowName,
+        mainColor: settings.mainColor,
+        isActivityBarColored: settings.isActivityBarColored,
+        isTitleBarColored: settings.isTitleBarColored,
+        isStatusBarColored: settings.isStatusBarColored,
+        isWindowNameColored: settings.isWindowNameColored,
+        isActiveItemsColored: settings.isActiveItemsColored,
+        setWindowTitle: settings.setWindowTitle
+    };
+
+    await writeSsotDocument(ssot);
 }
 
 export async function saveWorkspaceToGroup(groupName: string, workspace: WindowReference): Promise<void> {

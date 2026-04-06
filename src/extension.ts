@@ -20,6 +20,7 @@ import {
     loadWindowGroups,
     loadWorkspaceConfig,
     saveToWorkspaceConfig,
+    saveWindowSettingsToSsot,
     saveWorkspaceToGroup,
     renameWindowGroup
 } from './workspaces';
@@ -204,14 +205,7 @@ async function createWindowSettingsWebview(context: vscode.ExtensionContext, dir
                 
                 // Save configurations in parallel
                 const savePromises = [
-                    saveToWorkspaceConfig('name', newProps.windowName),
-                    saveToWorkspaceConfig('mainColor', newProps.mainColor),
-                    saveToWorkspaceConfig('isActivityBarColored', newProps.isActivityBarColored),
-                    saveToWorkspaceConfig('isTitleBarColored', newProps.isTitleBarColored),
-                    saveToWorkspaceConfig('isStatusBarColored', newProps.isStatusBarColored),
-                    saveToWorkspaceConfig('isWindowNameColored', newProps.isWindowNameColored),
-                    saveToWorkspaceConfig('isActiveItemsColored', newProps.isActiveItemsColored),
-                    saveToWorkspaceConfig('setWindowTitle', newProps.setWindowTitle)
+                    saveWindowSettingsToSsot(directory, newProps)
                 ];
 
                 // Save workspace reference with correct path
