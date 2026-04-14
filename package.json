@@ -2,7 +2,7 @@
     "name": "set-window-color-name",
     "displayName": "Set Window Color & Name",
     "description": "Set window colors and specify a name to distinguish multiple windows. Keywords: window colors peacock colorize",
-    "version": "2.0.0",
+    "version": "2.1.2",
     "engines": {
         "vscode": "^1.60.0"
     },
@@ -98,6 +98,50 @@
                             }
                         }
                     }
+                },
+                "windowColor.workspaceSettings": {
+                    "type": "object",
+                    "description": "Per-workspace color settings stored in user preferences",
+                    "default": {},
+                    "patternProperties": {
+                        ".*": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Name of the window"
+                                },
+                                "mainColor": {
+                                    "type": "string",
+                                    "description": "Main color of the window"
+                                },
+                                "isActivityBarColored": {
+                                    "type": "boolean",
+                                    "description": "Whether the activity bar is colored"
+                                },
+                                "isTitleBarColored": {
+                                    "type": "boolean",
+                                    "description": "Whether the title bar is colored"
+                                },
+                                "isStatusBarColored": {
+                                    "type": "boolean",
+                                    "description": "Whether the status bar is colored"
+                                },
+                                "isWindowNameColored": {
+                                    "type": "boolean",
+                                    "description": "Whether the window name is colored"
+                                },
+                                "isActiveItemsColored": {
+                                    "type": "boolean",
+                                    "description": "Whether active items are colored"
+                                },
+                                "setWindowTitle": {
+                                    "type": "boolean",
+                                    "description": "Whether to set the window title"
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -105,11 +149,16 @@
             {
                 "command": "set-window-color-name.openSettings",
                 "title": "Customize Window Color & Name"
+            },
+            {
+                "command": "set-window-color-name.removeColors",
+                "title": "Remove Window Colors & Restore Defaults"
             }
         ]
     },
     "scripts": {
         "vscode:prepublish": "npm run compile",
+        "vscode:uninstall": "node ./out/uninstall.js",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
         "pretest": "npm run compile && npm run lint",

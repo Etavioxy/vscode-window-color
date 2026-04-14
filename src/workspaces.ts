@@ -12,41 +12,50 @@ export async function loadWorkspaces(): Promise<(WindowReference & { settings: W
 
 export async function readConfig(directory: string): Promise<WindowSettings> {
     // console.log('[DEBUG] readConfig called for directory:', directory);
-    const uri = vscode.Uri.file(directory);
-    const configPath = directory.endsWith('.code-workspace') ? uri : uri.with({ path: `${uri.path}/.vscode/settings.json` });
-    // console.log('[DEBUG] Reading config from path:', configPath.fsPath);
-
-    let settings: any;
-    try {
-        const config = await vscode.workspace.fs.readFile(configPath);
-        settings = JSON.parse(config.toString());
-        // console.log('[DEBUG] Config file contents:', JSON.stringify(settings, null, 2));
-    } catch (error: any) {
-        console.error(`Failed to read config file at ${configPath.fsPath}: ${error.message}`);
-        settings = {};
-    }
-
-    const fallbackWindowName = directory.split('/').pop() || 'Untitled Window';
-    const windowColorSettings = directory.endsWith('.code-workspace') ? (settings['settings'] || {}) : settings;
-    // console.log('[DEBUG] Extracted windowColorSettings:', JSON.stringify(windowColorSettings, null, 2));
     
-    // Only generate random color if no color exists
-    const existingColor = windowColorSettings['windowColor.mainColor'];
+    // First try to read from user preferences
+    const userSettings = getUserWorkspaceSettings(directory);
+    if (userSettings) {
+        const fallbackWindowName = directory.split('/').pop() || 'Untitled Window';
+        const mainColor = userSettings.mainColor || generateRandomColor();
+        return {
+            windowName: userSettings.name || fallbackWindowName,
+            mainColor: mainColor,
+            mainColorContrast: getContrastColor(mainColor),
+            isActivityBarColored: userSettings.isActivityBarColored ?? false,
+            isTitleBarColored: userSettings.isTitleBarColored ?? false,
+            isStatusBarColored: userSettings.isStatusBarColored ?? true,
+            isWindowNameColored: userSettings.isWindowNameColored ?? true,
+            isActiveItemsColored: userSettings.isActiveItemsColored ?? true,
+            setWindowTitle: userSettings.setWindowTitle ?? false
+        };
+    }
+    
+    // Fallback: use VS Code's configuration API which correctly resolves settings
+    // from .code-workspace files across local/remote boundaries (e.g. SSH remotes)
+    const vsConfig = vscode.workspace.getConfiguration('windowColor');
+    const fallbackWindowName = directory.split('/').pop() || 'Untitled Window';
+
+    const existingColor = vsConfig.get<string>('mainColor');
     const mainColor = existingColor || generateRandomColor();
-    // console.log('[DEBUG] Using main color:', mainColor, '(existing:', existingColor, ')');
 
     const result = {
-        windowName: windowColorSettings['windowColor.name'] || fallbackWindowName,
+        windowName: vsConfig.get<string>('name') || fallbackWindowName,
         mainColor: mainColor,
         mainColorContrast: getContrastColor(mainColor),
-        isActivityBarColored: windowColorSettings['windowColor.isActivityBarColored'] ?? false,
-        isTitleBarColored: windowColorSettings['windowColor.isTitleBarColored'] ?? false,
-        isStatusBarColored: windowColorSettings['windowColor.isStatusBarColored'] ?? true,
-        isWindowNameColored: windowColorSettings['windowColor.isWindowNameColored'] ?? true,
-        isActiveItemsColored: windowColorSettings['windowColor.isActiveItemsColored'] ?? true,
-        setWindowTitle: windowColorSettings['windowColor.setWindowTitle'] ?? true
+        isActivityBarColored: vsConfig.get<boolean>('isActivityBarColored') ?? false,
+        isTitleBarColored: vsConfig.get<boolean>('isTitleBarColored') ?? false,
+        isStatusBarColored: vsConfig.get<boolean>('isStatusBarColored') ?? true,
+        isWindowNameColored: vsConfig.get<boolean>('isWindowNameColored') ?? true,
+        isActiveItemsColored: vsConfig.get<boolean>('isActiveItemsColored') ?? true,
+        setWindowTitle: vsConfig.get<boolean>('setWindowTitle') ?? false
     };
-    // console.log('[DEBUG] readConfig returning:', JSON.stringify(result, null, 2));
+
+    // Migrate workspace settings to user preferences if they exist
+    if (existingColor) {
+        await saveWorkspaceToUserSettings(directory, result);
+    }
+
     return result;
 }
 
@@ -145,8 +154,22 @@ export async function loadWorkspaceConfig(directory: string): Promise<WindowSett
 
 export async function saveToWorkspaceConfig(key: string, value: string | boolean): Promise<void> {
     // console.log('[DEBUG] saveToWorkspaceConfig called with key:', key, 'value:', value);
-    const config = vscode.workspace.getConfiguration('windowColor');
-    await config.update(key, value, vscode.ConfigurationTarget.Workspace);
+    
+    // Get current workspace directory
+    let currentWorkspace: string;
+    if (vscode.workspace.workspaceFile) {
+        currentWorkspace = vscode.workspace.workspaceFile.fsPath;
+    } else {
+        currentWorkspace = vscode.workspace.workspaceFolders?.[0].uri.fsPath || '';
+    }
+    
+    if (!currentWorkspace) {
+        console.error('No workspace found, cannot save setting');
+        return;
+    }
+    
+    // Save to user preferences instead of workspace
+    await saveWorkspaceSettingToUser(currentWorkspace, key, value);
     // console.log('[DEBUG] saveToWorkspaceConfig completed for key:', key);
 }
 
@@ -169,6 +192,75 @@ export async function renameWindowGroup(oldName: string, newName: string): Promi
     }
 }
 
+// User preference helper functions
+function normalizeWorkspacePath(directory: string): string {
+    // Normalize path separators and remove trailing slashes for consistent keys
+    return directory.replace(/\\/g, '/').replace(/\/$/, '');
+}
+
+function getUserWorkspaceSettings(directory: string): any | null {
+    const config = vscode.workspace.getConfiguration('windowColor');
+    const workspaceSettings = config.get<Record<string, any>>('workspaceSettings') || {};
+    const normalizedPath = normalizeWorkspacePath(directory);
+    return workspaceSettings[normalizedPath] || null;
+}
+
+async function saveWorkspaceSettingToUser(directory: string, key: string, value: string | boolean): Promise<void> {
+    const config = vscode.workspace.getConfiguration('windowColor');
+    const workspaceSettings = config.get<Record<string, any>>('workspaceSettings') || {};
+    const normalizedPath = normalizeWorkspacePath(directory);
+
+    // Initialize workspace settings if they don't exist
+    if (!workspaceSettings[normalizedPath]) {
+        workspaceSettings[normalizedPath] = {};
+    }
+
+    // Update the specific setting
+    workspaceSettings[normalizedPath][key] = value;
+
+    // Save back to user preferences
+    await config.update('workspaceSettings', workspaceSettings, vscode.ConfigurationTarget.Global);
+}
+
+export async function saveAllWorkspaceSettings(directory: string, settings: Record<string, string | boolean>): Promise<void> {
+    const config = vscode.workspace.getConfiguration('windowColor');
+    const workspaceSettings = config.get<Record<string, any>>('workspaceSettings') || {};
+    const normalizedPath = normalizeWorkspacePath(directory);
+
+    if (!workspaceSettings[normalizedPath]) {
+        workspaceSettings[normalizedPath] = {};
+    }
+
+    // Update all settings in a single operation
+    for (const [key, value] of Object.entries(settings)) {
+        workspaceSettings[normalizedPath][key] = value;
+    }
+
+    // Single atomic write
+    await config.update('workspaceSettings', workspaceSettings, vscode.ConfigurationTarget.Global);
+}
+
+async function saveWorkspaceToUserSettings(directory: string, settings: WindowSettings): Promise<void> {
+    const config = vscode.workspace.getConfiguration('windowColor');
+    const workspaceSettings = config.get<Record<string, any>>('workspaceSettings') || {};
+    const normalizedPath = normalizeWorkspacePath(directory);
+    
+    // Save all settings for this workspace
+    workspaceSettings[normalizedPath] = {
+        name: settings.windowName,
+        mainColor: settings.mainColor,
+        isActivityBarColored: settings.isActivityBarColored,
+        isTitleBarColored: settings.isTitleBarColored,
+        isStatusBarColored: settings.isStatusBarColored,
+        isWindowNameColored: settings.isWindowNameColored,
+        isActiveItemsColored: settings.isActiveItemsColored,
+        setWindowTitle: settings.setWindowTitle
+    };
+    
+    // Save to user preferences
+    await config.update('workspaceSettings', workspaceSettings, vscode.ConfigurationTarget.Global);
+}
+
 export async function applyColorCustomizations(customizations: any) {
     // console.log('[DEBUG] applyColorCustomizations called with:', JSON.stringify(customizations, null, 2));
     const config = vscode.workspace.getConfiguration();
@@ -189,11 +281,14 @@ export async function applyColorCustomizations(customizations: any) {
                 delete mergedCustomizations[key];
             }
         });
-        // console.log('[DEBUG] Merged color customizations:', JSON.stringify(mergedCustomizations, null, 2));
-        
+
+        const valueToWrite = Object.keys(mergedCustomizations).length === 0
+            ? undefined
+            : mergedCustomizations;
+
         await config.update(
             "workbench.colorCustomizations",
-            mergedCustomizations,
+            valueToWrite,
             vscode.ConfigurationTarget.Workspace
         );
         // console.log('[DEBUG] Color customizations successfully applied to workspace');
