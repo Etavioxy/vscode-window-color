@@ -297,24 +297,14 @@ function updateWorkspaceStatusbar(item: vscode.StatusBarItem, args: WindowSettin
     item.tooltip = `Project: ${args.windowName}\nColor: ${args.mainColor}`;
 }
 
-let originalWindowTitle: string | undefined;
-
 function updateWindowTitle(args: WindowSettings): void {
     const config = vscode.workspace.getConfiguration('window');
-
-    // Save the user's original title before we overwrite it (only once)
-    if (originalWindowTitle === undefined) {
-        const inspected = config.inspect('title');
-        // Use the workspace value if set, otherwise undefined (VS Code will use its own default)
-        originalWindowTitle = inspected?.workspaceValue as string | undefined ?? '';
-    }
 
     try {
         if (args.setWindowTitle) {
             config.update('title', args.windowName, vscode.ConfigurationTarget.Workspace);
         } else {
-            // Restore: remove workspace-level override so VS Code falls back to user/default
-            config.update('title', originalWindowTitle || undefined, vscode.ConfigurationTarget.Workspace);
+            config.update('title', undefined, vscode.ConfigurationTarget.Workspace);
         }
     } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to update window title: ${error.message}`);

@@ -281,11 +281,14 @@ export async function applyColorCustomizations(customizations: any) {
                 delete mergedCustomizations[key];
             }
         });
-        // console.log('[DEBUG] Merged color customizations:', JSON.stringify(mergedCustomizations, null, 2));
-        
+
+        const valueToWrite = Object.keys(mergedCustomizations).length === 0
+            ? undefined
+            : mergedCustomizations;
+
         await config.update(
             "workbench.colorCustomizations",
-            mergedCustomizations,
+            valueToWrite,
             vscode.ConfigurationTarget.Workspace
         );
         // console.log('[DEBUG] Color customizations successfully applied to workspace');
