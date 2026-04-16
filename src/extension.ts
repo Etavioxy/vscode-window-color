@@ -21,6 +21,10 @@ import {
     loadWorkspaceConfig,
     saveToWorkspaceConfig,
     saveWindowSettingsToSsot,
+    getConfiguredSsotPath,
+    hasLegacyWorkspaceSettings,
+    migrateLegacyToSsot,
+    migrateSsotToLegacy,
     saveWorkspaceToGroup,
     renameWindowGroup
 } from './workspaces';
@@ -49,19 +53,35 @@ export type WindowGroup = {
 let workspaceStatusbar : vscode.StatusBarItem;
 let isInitializing = true;
 
-export async function activate(context: vscode.ExtensionContext) {
-    // Check if we have a workspace file (.code-workspace)
-    let currentWorkspace: string;
+function getCurrentWorkspacePath(): string {
     if (vscode.workspace.workspaceFile) {
-        // Use the workspace file path if it exists
-        currentWorkspace = vscode.workspace.workspaceFile.fsPath;
-    } else {
-        // Otherwise use the first workspace folder
-        currentWorkspace = vscode.workspace.workspaceFolders?.[0].uri.fsPath || '';
+        return vscode.workspace.workspaceFile.fsPath;
     }
+    return vscode.workspace.workspaceFolders?.[0].uri.fsPath || '';
+}
+
+export async function activate(context: vscode.ExtensionContext) {
+    const currentWorkspace = getCurrentWorkspacePath();
     
     if (!currentWorkspace) {
         return;
+    }
+
+    const ssotPath = getConfiguredSsotPath();
+    if (ssotPath && await hasLegacyWorkspaceSettings(currentWorkspace)) {
+        const choice = await vscode.window.showInformationMessage(
+            'Detected legacy windowColor settings. Migrate to external SSOT mode now?',
+            'Migrate now',
+            'Later'
+        );
+        if (choice === 'Migrate now') {
+            const result = await migrateLegacyToSsot(currentWorkspace);
+            if (result.migrated) {
+                vscode.window.showInformationMessage(result.message);
+            } else {
+                vscode.window.showWarningMessage(result.message);
+            }
+        }
     }
     // console.log('[DEBUG] Reading initial config for workspace:', currentWorkspace);
     let currentConfig = await readConfig(currentWorkspace);
@@ -130,6 +150,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // createListCommand(context);
     createWindowSettingsCommand(context);
+    createMigrationCommands(context);
 
     // Initialize window title on activation
     updateWindowTitle(currentConfig);
@@ -149,6 +170,15 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(async (e) => {
             if (e.affectsConfiguration('windowColor') && !isInitializing) {
+                if (e.affectsConfiguration('windowColor.configPath')) {
+                    const changedWorkspace = getCurrentWorkspacePath();
+                    if (changedWorkspace && getConfiguredSsotPath() && await hasLegacyWorkspaceSettings(changedWorkspace)) {
+                        const migrated = await migrateLegacyToSsot(changedWorkspace);
+                        if (migrated.migrated) {
+                            vscode.window.showInformationMessage(migrated.message);
+                        }
+                    }
+                }
                 // console.log('[DEBUG] Configuration change detected, isInitializing:', isInitializing);
                 const updatedConfig = await readConfig(currentWorkspace);
                 // console.log('[DEBUG] Updated config after change:', JSON.stringify(updatedConfig, null, 2));
@@ -163,6 +193,38 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         })
     );
+}
+
+function createMigrationCommands(context: vscode.ExtensionContext) {
+    const toNewMode = vscode.commands.registerCommand('set-window-color-name.migrateToNewMode', async () => {
+        const workspacePath = getCurrentWorkspacePath();
+        if (!workspacePath) {
+            vscode.window.showWarningMessage('No current workspace found.');
+            return;
+        }
+        const result = await migrateLegacyToSsot(workspacePath);
+        if (result.migrated) {
+            vscode.window.showInformationMessage(result.message);
+        } else {
+            vscode.window.showWarningMessage(result.message);
+        }
+    });
+
+    const toLegacyMode = vscode.commands.registerCommand('set-window-color-name.migrateToLegacyMode', async () => {
+        const workspacePath = getCurrentWorkspacePath();
+        if (!workspacePath) {
+            vscode.window.showWarningMessage('No current workspace found.');
+            return;
+        }
+        const result = await migrateSsotToLegacy(workspacePath);
+        if (result.migrated) {
+            vscode.window.showInformationMessage(result.message);
+        } else {
+            vscode.window.showWarningMessage(result.message);
+        }
+    });
+
+    context.subscriptions.push(toNewMode, toLegacyMode);
 }
 
 async function createWindowSettingsWebview(context: vscode.ExtensionContext, directory: string) {

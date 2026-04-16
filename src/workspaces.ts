@@ -19,6 +19,17 @@ type SsotDocument = {
     };
 };
 
+const LEGACY_WINDOW_COLOR_KEYS = [
+    'name',
+    'mainColor',
+    'isActivityBarColored',
+    'isTitleBarColored',
+    'isStatusBarColored',
+    'isWindowNameColored',
+    'isActiveItemsColored',
+    'setWindowTitle'
+] as const;
+
 function normalizeWorkspaceKey(value: string): string {
     return value.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase();
 }
@@ -29,6 +40,10 @@ function getSsotConfigPath(): string | undefined {
         return undefined;
     }
     return rawPath.trim();
+}
+
+export function getConfiguredSsotPath(): string | undefined {
+    return getSsotConfigPath();
 }
 
 async function readSsotDocument(): Promise<SsotDocument | null> {
@@ -54,6 +69,40 @@ async function writeSsotDocument(ssot: SsotDocument): Promise<void> {
     const uri = vscode.Uri.file(configPath);
     const payload = `${JSON.stringify(ssot, null, 2)}\n`;
     await vscode.workspace.fs.writeFile(uri, Buffer.from(payload, 'utf8'));
+}
+
+async function readLegacySettingsFromWorkspace(directory: string): Promise<SsotWorkspaceSettings | null> {
+    const uri = vscode.Uri.file(directory);
+    const configPath = directory.endsWith('.code-workspace') ? uri : uri.with({ path: `${uri.path}/.vscode/settings.json` });
+
+    let settings: any;
+    try {
+        const config = await vscode.workspace.fs.readFile(configPath);
+        settings = JSON.parse(config.toString());
+    } catch {
+        return null;
+    }
+
+    const windowColorSettings = directory.endsWith('.code-workspace') ? (settings['settings'] || {}) : settings;
+    const hasAnyLegacyKey = LEGACY_WINDOW_COLOR_KEYS.some(key => windowColorSettings[`windowColor.${key}`] !== undefined);
+    if (!hasAnyLegacyKey) {
+        return null;
+    }
+
+    return {
+        name: windowColorSettings['windowColor.name'],
+        mainColor: windowColorSettings['windowColor.mainColor'],
+        isActivityBarColored: windowColorSettings['windowColor.isActivityBarColored'],
+        isTitleBarColored: windowColorSettings['windowColor.isTitleBarColored'],
+        isStatusBarColored: windowColorSettings['windowColor.isStatusBarColored'],
+        isWindowNameColored: windowColorSettings['windowColor.isWindowNameColored'],
+        isActiveItemsColored: windowColorSettings['windowColor.isActiveItemsColored'],
+        setWindowTitle: windowColorSettings['windowColor.setWindowTitle']
+    };
+}
+
+export async function hasLegacyWorkspaceSettings(directory: string): Promise<boolean> {
+    return (await readLegacySettingsFromWorkspace(directory)) !== null;
 }
 
 function getSsotSettingsForDirectory(
@@ -238,11 +287,65 @@ export async function loadWorkspaceConfig(directory: string): Promise<WindowSett
     }
 }
 
-export async function saveToWorkspaceConfig(key: string, value: string | boolean): Promise<void> {
+export async function saveToWorkspaceConfig(key: string, value: string | boolean | undefined): Promise<void> {
     // console.log('[DEBUG] saveToWorkspaceConfig called with key:', key, 'value:', value);
     const config = vscode.workspace.getConfiguration('windowColor');
     await config.update(key, value, vscode.ConfigurationTarget.Workspace);
     // console.log('[DEBUG] saveToWorkspaceConfig completed for key:', key);
+}
+
+export async function migrateLegacyToSsot(directory: string): Promise<{ migrated: boolean; message: string }> {
+    const configPath = getSsotConfigPath();
+    if (!configPath) {
+        return { migrated: false, message: 'windowColor.configPath is not configured' };
+    }
+
+    const legacy = await readLegacySettingsFromWorkspace(directory);
+    if (!legacy) {
+        return { migrated: false, message: 'No legacy workspace settings found' };
+    }
+
+    const ssot = (await readSsotDocument()) || {};
+    if (!ssot.windowColor) {
+        ssot.windowColor = {};
+    }
+    if (!ssot.windowColor.workspaceSettings) {
+        ssot.windowColor.workspaceSettings = {};
+    }
+    const previous = getSsotSettingsForDirectory(ssot, directory) || {};
+    ssot.windowColor.workspaceSettings[directory] = {
+        ...previous,
+        ...legacy
+    };
+    await writeSsotDocument(ssot);
+
+    await Promise.all(LEGACY_WINDOW_COLOR_KEYS.map(k => saveToWorkspaceConfig(k, undefined)));
+    return { migrated: true, message: `Migrated legacy settings to SSOT: ${configPath}` };
+}
+
+export async function migrateSsotToLegacy(directory: string): Promise<{ migrated: boolean; message: string }> {
+    const ssot = await readSsotDocument();
+    if (!ssot) {
+        return { migrated: false, message: 'SSOT document not found' };
+    }
+
+    const settings = getSsotSettingsForDirectory(ssot, directory);
+    if (!settings) {
+        return { migrated: false, message: 'No SSOT workspace settings found for current workspace' };
+    }
+
+    await Promise.all([
+        saveToWorkspaceConfig('name', settings.name),
+        saveToWorkspaceConfig('mainColor', settings.mainColor),
+        saveToWorkspaceConfig('isActivityBarColored', settings.isActivityBarColored),
+        saveToWorkspaceConfig('isTitleBarColored', settings.isTitleBarColored),
+        saveToWorkspaceConfig('isStatusBarColored', settings.isStatusBarColored),
+        saveToWorkspaceConfig('isWindowNameColored', settings.isWindowNameColored),
+        saveToWorkspaceConfig('isActiveItemsColored', settings.isActiveItemsColored),
+        saveToWorkspaceConfig('setWindowTitle', settings.setWindowTitle)
+    ]);
+
+    return { migrated: true, message: 'Migrated SSOT settings back to legacy workspace settings' };
 }
 
 export async function saveWindowSettingsToSsot(directory: string, settings: WindowSettings): Promise<void> {
